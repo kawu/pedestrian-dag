@@ -1,8 +1,9 @@
-name:               word-lattice
+name:               pedestrian-dag
 version:            0.1.0
-synopsis:           Word lattices
+synopsis:           A pedestrian implementation of directed acyclic graphs
 description:
-    The library implements word lattices.
+    The library implements a pedestrian representation of
+    directed acyclic graphs.
 license:            BSD3
 license-file:       LICENSE
 cabal-version:      >= 1.6
@@ -11,18 +12,18 @@ author:             Jakub Waszczuk
 maintainer:         waszczuk.kuba@gmail.com
 stability:          experimental
 category:           Data, Data Structures
-homepage:           https://github.com/kawu/word-lattice
+homepage:           https://github.com/kawu/pedestrian-dag
 build-type:         Simple
 
 library
     hs-source-dirs: src
     build-depends:
         base                >= 4        && < 5
-      , containers          >= 0.5      && < 0.6
+      , containers          >= 0.4      && < 0.6
       , vector              >= 0.10     && < 0.11
 
     exposed-modules:
-        Data.WordLattice
+        Data.DAG
 
     -- other-modules:
 
@@ -30,4 +31,4 @@ library
 
 source-repository head
     type: git
-    location: https://github.com/kawu/word-lattice.git
+    location: https://github.com/kawu/pedestrian-dag.git
