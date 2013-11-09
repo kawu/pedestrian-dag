@@ -15,11 +15,14 @@
 module Data.DAG
 ( 
 -- * Types
-  DAG
+  DAG (..)
 , NodeID
 , Node (..)
 , EdgeID
 , Edge (..)
+
+-- * Build
+, fromEdges
 
 -- * Query
 -- ** Node
@@ -48,7 +51,6 @@ import           Control.Applicative ((<$))
 import           Control.Monad (foldM)
 import           Data.List (foldl')
 import qualified Data.Map as M
-import qualified Data.Vector.Unboxed as U
 
 
 -- | A node identifier.
@@ -61,18 +63,28 @@ type EdgeID = Int
 
 -- | A node.
 data Node a = Node
-    { valN  :: a
-    , ing   :: U.Vector EdgeID
-    , out   :: U.Vector EdgeID }
-    deriving (Functor)
+    { ing   :: [EdgeID]
+    , out   :: [EdgeID]
+    , value :: a }
+    deriving (Eq, Ord, Show, Functor)
+
+
+-- | Add ingoing edge.
+addIng :: EdgeID -> Node a -> Node a
+addIng eid x@Node{..} = x {ing = eid:ing}
+
+
+-- | Add outgoing edge.
+addOut :: EdgeID -> Node a -> Node a
+addOut eid x@Node{..} = x {out = eid:out}
 
 
 -- | An edge.
 data Edge a = Edge
-    { valE  :: a
-    , beg   :: NodeID
-    , end   :: NodeID }
-    deriving (Functor)
+    { from  :: NodeID
+    , to    :: NodeID
+    , label :: a }
+    deriving (Eq, Ord, Show, Functor)
 
 
 -- | A lattice is a directed acyclic graph (DAG) with values of type
@@ -83,9 +95,34 @@ data DAG a b = DAG {
       nodeMap  :: M.Map NodeID (Node a)
     -- | Map of edges.
     , edgeMap  :: M.Map EdgeID (Edge b) }
+    deriving (Eq, Ord, Show, Functor)
 -- The structure changes rarely, so it might be a good idea to
 -- store node-level and edge-level values in separate sub-structures.
 
+
+-------------------------------------------------------------------
+-- Build
+-------------------------------------------------------------------
+
+
+-- | Build DAG from a list of edges.
+fromEdges :: [Edge a] -> DAG () a
+fromEdges xs0 = DAG
+    { nodeMap = newNodeMap
+    , edgeMap = M.fromList xs }
+  where
+    -- Edges with identifiers.
+    xs = zip [0..] xs0
+    -- Resulting map of nodes.
+    newNodeMap = foldl' updNodeMap M.empty xs
+    -- Updeate node map with a particular edge.
+    updNodeMap m (eid, Edge{..})
+        = updNode (addOut eid) from
+        $ updNode (addIng eid) to m
+    updNode f nid m =
+        let g Nothing  = Just (f $ Node [] [] ())
+            g (Just x) = Just (f x)
+        in  M.alter g nid m
 
 -------------------------------------------------------------------
 -- Node queries
@@ -125,13 +162,13 @@ node d x = case M.lookup x (nodeMap d) of
 
 -- | Return edges in a topological order.  Similar to `nodeIDs`.
 edgeIDs :: DAG a b -> [EdgeID]
-edgeIDs d = concatMap (U.toList . ing . node d) (nodeIDs d)
+edgeIDs d = concatMap (ing . node d) (nodeIDs d)
 
 
 -- | Return DAG edges in a reverse topological order.
 -- Similar to `nodeIDs'`.
 edgeIDs' :: DAG a b -> [EdgeID]
-edgeIDs' d = concatMap (U.toList . out . node d) (nodeIDs' d)
+edgeIDs' d = concatMap (out . node d) (nodeIDs' d)
 
 
 -- | Resolve the edge identifier.
