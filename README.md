@@ -1,4 +1,4 @@
-word-lattice
-============
+pedestrian-dag
+==============
 
-Word lattices
+A pedestrian implementation of directed acyclic graphs.
