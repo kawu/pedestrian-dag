@@ -1,259 +1,401 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 
--- | A pedestrian implementation of a directed acyclic graph.
--- Sharing is explicitely represented by using node-level and
--- edge-level identifiers.
--- The module may be convenient to use if your data structure
--- doesn't change often.
+-- | A pedestrian implementation of a directed acyclic graph. Sharing is
+-- explicitely represented by using node-level and edge-level identifiers. The
+-- module may be convenient to use if your data structure doesn't change often.
 --
--- Note: many functions work under the assumption, that the DAG
--- is stored in a topological order.
+-- TODO: Implement topological sorting after which the order over edge IDs and
+-- node IDs is consistent with the topological order.
 
 
 module Data.DAG
-( 
+(
 -- * Types
-  DAG (..)
-, NodeID
-, Node (..)
-, EdgeID
-, Edge (..)
+  DAG
+, NodeID (..)
+, EdgeID (..)
 
--- * Build
-, fromEdges
+-- * Primitive Operations
+, begsWith
+, endsWith
+, ingoingEdges
+, outgoingEdges
+, nodeLabel
+, edgeLabel
 
--- * Query
--- ** Node
-, node
-, nodeIDs
-, nodeIDs'
--- ** Edge
-, edge
-, edgeIDs
-, edgeIDs'
+-- * Intermediate Operations
+, prevEdges
+, isInitialEdge
+-- , isInitialNode
+, nextEdges
+, isFinalEdge
 
--- * Map
+, minEdge
+, maxEdge
+
 , mapN
 , mapE
-, forward
-, backward
-, forwardM
-, backwardM
+, zipE
 
--- -- * Topological sorting
--- , topSort
+-- * Advanced Operations
+, dagNodes
+, dagEdges
+
+-- * Conversion
+, fromList
+, fromList'
+-- ** Provisional
+, toListProv
+
+-- * Check
+, isOK
 ) where
 
 
-import           Control.Applicative ((<$))
-import           Control.Monad (foldM)
-import           Data.List (foldl')
-import qualified Data.Map as M
+import qualified Data.Foldable as F
+import qualified Data.Traversable as T
+import qualified Data.Array as A
+-- import qualified Data.Vector as V
+
+import qualified Data.Set as S
+import qualified Data.Map.Strict as M
+
+import Data.Binary (Binary, get, put, putWord8, getWord8)
+-- import Data.Vector.Binary ()
+-- import qualified Data.Binary as B
 
 
--- | A node identifier.
-type NodeID = Int
+------------------------------------------------------------------
+-- Types
+------------------------------------------------------------------
 
 
--- | An edge identifier.
-type EdgeID = Int
+-- | A directed acyclic graph (DAG) with nodes of type `a` and
+-- edges of type `b`.
+data DAG a b = DAG
+  { nodeMap :: M.Map NodeID (Node a)
+  , edgeMap :: M.Map EdgeID (Edge b)
+  } deriving (Functor, F.Foldable, T.Traversable)
+
+instance (Binary a, Binary b) => Binary (DAG a b) where
+  put = undefined
+  get = undefined
 
 
--- | A node.
+-- | Node ID.
+newtype NodeID = NodeID {unNodeID :: Int}
+  deriving (Show, Eq, Ord)
+
+
+-- | Node of the DAG.
 data Node a = Node
-    { ing   :: [EdgeID]
-    , out   :: [EdgeID]
-    , value :: a }
-    deriving (Eq, Ord, Show, Functor)
+  { ingoSet :: S.Set EdgeID
+  , outgoSet :: S.Set EdgeID
+  , ndLabel :: a }
+  deriving (Show, Eq, Ord)
 
 
--- | Add ingoing edge.
-addIng :: EdgeID -> Node a -> Node a
-addIng eid x@Node{..} = x {ing = eid:ing}
+-- | ID of an edge. The following properties must be satisfied by `EdgeID`:
+--
+--   * The ordering of edge IDs (`Ord` instance) is consistent with the
+--     topological ordering of the edges.
+--   * The smallest `EdgeID` of a given DAG, `minEdge`, is equal
+--     to `0` (`EdgeID 0`).
+--
+-- Additional important property, which guarantees that inference computations
+-- over the DAG, based on dynamic programming, are efficient:
+--
+--   * Let `e` be the greatest `EdgeID` in the DAG. Then, the set of `EdgeID`s
+--     in the DAG is equal to {0 .. e}.
+--
+-- However, this last property is not required for the correcntess of the
+-- inference computations, it only improves their memory complexity.
+newtype EdgeID = EdgeID {unEdgeID :: Int}
+  deriving (Show, Eq, Ord, Num, A.Ix)
 
 
--- | Add outgoing edge.
-addOut :: EdgeID -> Node a -> Node a
-addOut eid x@Node{..} = x {out = eid:out}
-
-
--- | An edge.
+-- | Edge of the DAG.
 data Edge a = Edge
-    { from  :: NodeID
-    , to    :: NodeID
-    , label :: a }
-    deriving (Eq, Ord, Show, Functor)
+  { tailNode :: NodeID
+  , headNode :: NodeID
+  , edLabel  :: a }
+  deriving (Show, Eq, Ord, Functor, F.Foldable, T.Traversable)
 
 
--- | A lattice is a directed acyclic graph (DAG) with values of type
--- `a` assigned to individual nodes and values of type `b` assigned
--- to individual edges.
-data DAG a b = DAG {
-    -- | Map of nodes.
-      nodeMap  :: M.Map NodeID (Node a)
-    -- | Map of edges.
-    , edgeMap  :: M.Map EdgeID (Edge b) }
-    deriving (Eq, Ord, Show, Functor)
--- The structure changes rarely, so it might be a good idea to
--- store node-level and edge-level values in separate sub-structures.
+------------------------------------------------------------------
+-- Primitive Operations
+------------------------------------------------------------------
 
 
--------------------------------------------------------------------
--- Build
--------------------------------------------------------------------
+-- | Return the tail node of the given edge.
+begsWith :: EdgeID -> DAG a b -> NodeID
+begsWith i DAG{..} = case M.lookup i edgeMap of
+  Nothing -> error "begsWith: incorrent edge ID"
+  Just Edge{..} -> tailNode
 
 
--- | Build DAG from a list of edges.
-fromEdges :: [Edge a] -> DAG () a
-fromEdges xs0 = DAG
-    { nodeMap = newNodeMap
-    , edgeMap = M.fromList xs }
+-- | Return the head node of the given edge.
+endsWith :: EdgeID -> DAG a b -> NodeID
+endsWith i DAG{..} = case M.lookup i edgeMap of
+  Nothing -> error "endsWith: incorrent edge ID"
+  Just Edge{..} -> headNode
+
+
+-- | The list of outgoint edges from the given node.
+ingoingEdges :: NodeID -> DAG a b -> [EdgeID]
+ingoingEdges i DAG{..} = case M.lookup i nodeMap of
+  Nothing -> error "ingoingEdges: incorrect ID"
+  Just Node{..} -> S.toList ingoSet
+
+
+-- | The list of outgoint edges from the given node.
+outgoingEdges :: NodeID -> DAG a b -> [EdgeID]
+outgoingEdges i DAG{..} = case M.lookup i nodeMap of
+  Nothing -> error "outgoingEdges: incorrect ID"
+  Just Node{..} -> S.toList outgoSet
+
+
+-- | The label assigned to the given node.
+nodeLabel :: NodeID -> DAG a b -> a
+nodeLabel i DAG{..} = case M.lookup i nodeMap of
+  Nothing -> error "nodeLabel: incorrect ID"
+  Just Node{..} -> ndLabel
+
+
+-- | The label assigned to the given node.
+edgeLabel :: EdgeID -> DAG a b -> b
+edgeLabel i DAG{..} = case M.lookup i edgeMap of
+  Nothing -> error "edgeLabel: incorrent ID"
+  Just Edge{..} -> edLabel
+
+
+-- | The greatest `EdgeID` in the DAG.
+minEdge :: DAG a b -> EdgeID
+minEdge = fst . M.findMin . edgeMap
+
+
+-- | The greatest `EdgeID` in the DAG.
+maxEdge :: DAG a b -> EdgeID
+maxEdge = fst . M.findMax . edgeMap
+
+
+------------------------------------------------------------------
+-- Not-so-primitive ops, but still looking at the implementation
+------------------------------------------------------------------
+
+
+-- | The list of DAG nodes in ascending order.
+dagNodes :: DAG a b -> [NodeID]
+dagNodes = M.keys . nodeMap
+
+
+-- | Map function over node labels.
+mapN :: (a -> b) -> DAG a c -> DAG b c
+mapN f dag =
+  dag {nodeMap = nodeMap'}
   where
-    -- Edges with identifiers.
-    xs = zip [0..] xs0
-    -- Resulting map of nodes.
-    newNodeMap = foldl' updNodeMap M.empty xs
-    -- Updeate node map with a particular edge.
-    updNodeMap m (eid, Edge{..})
-        = updNode (addOut eid) from
-        $ updNode (addIng eid) to m
-    updNode f nid m =
-        let g Nothing  = Just (f $ Node [] [] ())
-            g (Just x) = Just (f x)
-        in  M.alter g nid m
-
--------------------------------------------------------------------
--- Node queries
--------------------------------------------------------------------
+    nodeMap' = M.fromList
+      [ (nodeID, node {ndLabel = newLabel})
+      | (nodeID, node) <- M.toList (nodeMap dag)
+      , let newLabel = f (ndLabel node) ]
 
 
--- | Return node identifiers in a topological order.
--- TODO: assumes, that the graph is sorted topologically.
-nodeIDs :: DAG a b -> [NodeID]
-nodeIDs = map fst . M.toAscList . nodeMap
+-- | The list of DAG edges in ascending order.
+dagEdges :: DAG a b -> [EdgeID]
+dagEdges = M.keys . edgeMap
 
 
--- | Return node identifiers in a reverse topological order.
--- TODO: assumes, that the graph is sorted topologically.
-nodeIDs' :: DAG a b -> [NodeID]
-nodeIDs' = map fst . M.toDescList . nodeMap
--- NOTE: containers 0.5.X are needed, because older versions don't
--- provide the `I.toDescList` function.
-
-
--- | Resolve the node identifier.
-node :: DAG a b -> NodeID -> Node a
-node d x = case M.lookup x (nodeMap d) of
-    Nothing -> error "node: invalid identifier"
-    Just y  -> y
-
-
--- -- | Get the list of preceding, adjacent nodes.
--- prevN :: DAG a b -> NodeID -> [NodeID]
--- prevN = undefined
-
-
--------------------------------------------------------------------------
--- Edge queries
--------------------------------------------------------------------------
-
-
--- | Return edges in a topological order.  Similar to `nodeIDs`.
-edgeIDs :: DAG a b -> [EdgeID]
-edgeIDs d = concatMap (ing . node d) (nodeIDs d)
-
-
--- | Return DAG edges in a reverse topological order.
--- Similar to `nodeIDs'`.
-edgeIDs' :: DAG a b -> [EdgeID]
-edgeIDs' d = concatMap (out . node d) (nodeIDs' d)
-
-
--- | Resolve the edge identifier.
-edge :: DAG a b -> EdgeID -> Edge b
-edge d x = case M.lookup x (edgeMap d) of
-    Nothing -> error "edge: invalid identifier"
-    Just y  -> y
-
-
--------------------------------------------------------------------------
--- Mapping
--------------------------------------------------------------------------
-
-
--- | Map function over the node values.
-mapN :: (a -> c) -> DAG a b -> DAG c b
-mapN f dag@DAG{..} = dag { nodeMap = fmap (fmap f) nodeMap }
-
-
--- | Map function over the edge values (consider using `fmap` instead).
-mapE :: (b -> c) -> DAG a b -> DAG a c
-mapE f dag@DAG{..} = dag { edgeMap = fmap (fmap f) edgeMap }
-
-
--- | Map the given function over edge values giving it access
--- to the already computed values of the preceding edges.
-forward :: (DAG a c -> EdgeID -> c) -> DAG a b -> DAG a c
-forward f dag = mapDir f dag (edgeIDs dag)
-
-
--- | Map the given function over edge values giving it access
--- to the already computed values of the following edges.
-backward :: (DAG a c -> EdgeID -> c) -> DAG a b -> DAG a c
-backward f dag = mapDir f dag (edgeIDs' dag)
-
-
--- | An abstraction over the `forward` and `backward` functions.
-mapDir :: (DAG a c -> EdgeID -> c) -> DAG a b -> [EdgeID] -> DAG a c
-mapDir f dag xs =
-    foldl' upd dag0 xs
+-- | Similar to `fmap` but the mapping function has access to IDs of the
+-- individual edges.
+mapE :: (EdgeID -> b -> c) -> DAG a b -> DAG a c
+mapE f dag =
+  dag {edgeMap = edgeMap'}
   where
-    dag0 = dag { edgeMap = M.empty }
-    upd acc x =
-        let y = f acc x
-            e = y <$ (edgeMap dag M.! x)
-            m = M.insert x e (edgeMap acc)
-        in  y `seq` e `seq` m `seq` acc { edgeMap = m }
+    edgeMap' = M.fromList
+      [ (edgeID, edge {edLabel = newLabel})
+      | (edgeID, edge) <- M.toList (edgeMap dag)
+      , let newLabel = f edgeID (edLabel edge) ]
 
 
--- | Map the given monadic function over edge values giving it access
--- to the already computed values of the preceding edges.
-forwardM
-    :: Monad m => (DAG a c -> EdgeID -> m c)
-    -> DAG a b -> m (DAG a c)
-forwardM f dag = mapDirM f dag (edgeIDs dag)
-
-
--- | Map the given monadic function over edge values giving it access
--- to the already computed values of the following edges.
-backwardM
-    :: Monad m => (DAG a c -> EdgeID -> m c)
-    -> DAG a b -> m (DAG a c)
-backwardM f dag = mapDirM f dag (edgeIDs' dag)
-
-
--- | An abstraction over the `forwardM` and `backwardM` functions.
-mapDirM
-    :: Monad m => (DAG a c -> EdgeID -> m c)
-    -> DAG a b -> [EdgeID] -> m (DAG a c)
-mapDirM f dag xs =
-    foldM upd dag0 xs
+-- | Zip labels assigned to the same edges in the two input DAGs. Node labels
+-- from the first DAG are preserved. The function fails if the input DAGs
+-- contain different sets of edge IDs or node IDs.
+zipE :: DAG a b -> DAG x c -> DAG a (b, c)
+zipE dagL dagR
+  | M.keysSet (nodeMap dagL) /= M.keysSet (nodeMap dagR) =
+      error "zipE: different sets of node IDs"
+  | M.keysSet (edgeMap dagL) /= M.keysSet (edgeMap dagR) =
+      error "zipE: different sets of edge IDs"
+  | otherwise = DAG
+      { nodeMap = newNodeMap
+      , edgeMap = newEdgeMap }
   where
-    dag0 = dag { edgeMap = M.empty }
-    upd acc x = do
-        y <- f acc x
-        let e = y <$ (edgeMap dag M.! x)
-            m = M.insert x e (edgeMap acc)
-        return $ y `seq` e `seq` m `seq` acc { edgeMap = m }
+    newNodeMap = nodeMap dagL
+    newEdgeMap = M.fromList
+      [ (edgeID, newEdge)
+      | edgeID <- M.keys (edgeMap dagL)
+      , let newEdge = mergeEdges
+              (edgeMap dagL M.! edgeID)
+              (edgeMap dagR M.! edgeID) ]
+    mergeEdges e1 e2
+      | tailNode e1 /= tailNode e2 =
+          error "zipE.mergEdges: different tail nodes"
+      | headNode e1 /= headNode e2 =
+          error "zipE.mergEdges: different head nodes"
+      | otherwise =
+          let newLabel = (edLabel e1, edLabel e2)
+          in  e1 {edLabel = newLabel}
 
 
--------------------------------------------------------------------
--- Topological sorting
--------------------------------------------------------------------
--- 
--- 
--- -- | Perform topological sort of the lattice nodes.
--- topSort :: Lattice a b -> Lattice a b
--- topSort = error "topSort: not implemented"
+------------------------------------------------------------------
+-- Intermediate Operations
+------------------------------------------------------------------
+
+
+-- | The list of the preceding edges of the given edge.
+prevEdges :: EdgeID -> DAG a b -> [EdgeID]
+prevEdges edgeID dag =
+  let tailNodeID = begsWith edgeID dag
+  in  ingoingEdges tailNodeID dag
+
+
+-- | Is the given edge initial?
+isInitialEdge :: EdgeID -> DAG a b -> Bool
+isInitialEdge edgeID = null . prevEdges edgeID
+
+
+-- -- | Is the given node initial?
+-- isInitialNode :: NodeID -> DAG a b -> Bool
+-- isInitialNode nodeID = null . ingoingEdges nodeID
+
+
+-- | The list of the succeding edges of the given edge.
+nextEdges :: EdgeID -> DAG a b -> [EdgeID]
+nextEdges edgeID dag =
+  let headNodeID = endsWith edgeID dag
+  in  outgoingEdges headNodeID dag
+
+
+-- | Is the given edge initial?
+isFinalEdge :: EdgeID -> DAG a b -> Bool
+isFinalEdge edgeID = null . nextEdges edgeID
+
+
+------------------------------------------------------------------
+-- Conversion
+------------------------------------------------------------------
+
+
+-- | Convert a sequence of (node label, edge label) pairs to a trivial DAG.
+-- The first argument is the first node label.
+_fromList :: a -> [(a, b)] -> DAG a b
+_fromList nodeLabel0 xs = DAG
+  { nodeMap = newNodeMap -- M.unions [begNodeMap, middleNodeMap, endNodeMap]
+  , edgeMap = newEdgeMap }
+  where
+
+    newNodeMap = M.fromList $ do
+      let nodeLabels = nodeLabel0 : map fst xs
+          xsLength = length xs
+      (i, y) <- zip [0 .. length xs] nodeLabels
+      let node = Node
+            { ingoSet  =
+                if i > 0
+                then S.singleton $ EdgeID (i-1)
+                else S.empty
+            , outgoSet =
+                if i < xsLength
+                then S.singleton $ EdgeID i
+                else S.empty
+            , ndLabel = y }
+      return (NodeID i, node)
+
+    newEdgeMap = M.fromList $ do
+      (i, x) <- zip [0..] (map snd xs)
+      let edge = Edge
+            { tailNode = NodeID i
+            , headNode = NodeID (i+1)
+            , edLabel  = x }
+      return (EdgeID i, edge)
+
+--     begNodeMap =
+--       let node = Node
+--             { ingoSet  = S.empty
+--             , outgoSet = S.singleton $ EdgeID 0
+--             , ndLabel = nodeLabel0 }
+--       in  M.singleton (NodeID 0) node
+--     middleNodeMap = M.fromList $ do
+--       let nodeLabels = map fst xs
+--       (i, nodeLabel) <- zip [1 .. length xs - 1] nodeLabels
+--       let node = Node
+--             { ingoSet  = S.singleton $ EdgeID (i-1)
+--             , outgoSet = S.singleton $ EdgeID i
+--             , ndLabel = nodeLabel }
+--       return (NodeID i, node)
+--     endNodeMap =
+--       let n = length xs
+--           node = Node
+--             { ingoSet  = S.singleton $ EdgeID (n-1)
+--             , outgoSet = S.empty
+--             , ndLabel = () }
+--       in  M.singleton (NodeID n) node
+
+
+-- | Convert a sequence of items to a trivial DAG. Afterwards, check if the
+-- resulting DAG is well-structured and throw error if not.
+fromList :: [a] -> DAG () a
+fromList xs =
+  if isOK dag
+  then dag
+  else error "fromList: resulting DAG not `isOK`"
+  where
+    dag = _fromList () $ zip (repeat ()) xs
+
+
+-- | Convert a sequence of items to a trivial DAG. Afterwards, check if the
+-- resulting DAG is well-structured and throw error if not.
+fromList' :: a -> [(a, b)] -> DAG a b
+fromList' x xs =
+  if isOK dag
+  then dag
+  else error "fromList': resulting DAG not `isOK`"
+  where
+    dag = _fromList x xs
+
+
+------------------------------------------------------------------
+-- Provisional
+------------------------------------------------------------------
+
+
+-- | Convert the DAG to a list, provided that it was constructed from a list,
+-- which is not checked.
+toListProv :: DAG () a -> [a]
+toListProv DAG{..} =
+  [ edLabel edge
+  | (_edgeID, edge) <- M.toAscList edgeMap ]
+
+
+------------------------------------------------------------------
+-- Check
+------------------------------------------------------------------
+
+
+-- | Check if the DAG is well-structured.
+isOK :: DAG a b -> Bool
+isOK DAG{..} =
+  nodeMapOK && edgeMapOK
+  where
+    nodeMapOK = and
+      [ M.member edgeID edgeMap
+      | (_nodeID, Node{..}) <- M.toList nodeMap
+      , edgeID <- S.toList (S.union ingoSet outgoSet) ]
+    edgeMapOK = and
+      [ M.member nodeID nodeMap
+      | (_edgeID, Edge{..}) <- M.toList edgeMap
+      , nodeID <- [tailNode, headNode] ]
