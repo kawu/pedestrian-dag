@@ -19,13 +19,16 @@ module Data.DAG
   DAG
 , NodeID (..)
 , EdgeID (..)
+, Edge (..)
 
 -- * Primitive Operations
 , begsWith
 , endsWith
 , ingoingEdges
 , outgoingEdges
+, maybeNodeLabel
 , nodeLabel
+, maybeEdgeLabel
 , edgeLabel
 
 -- * Intermediate Operations
@@ -49,14 +52,16 @@ module Data.DAG
 -- * Conversion
 , fromList
 , fromList'
--- ** Provisional
-, toListProv
+, fromEdgesUnsafe
+-- -- ** Provisional
+-- , toListProv
 
 -- * Check
 , isOK
 ) where
 
 
+import           Control.Applicative ((<$>))
 import qualified Data.Foldable as F
 import qualified Data.Traversable as T
 import qualified Data.Array as A
@@ -146,18 +151,24 @@ endsWith i DAG{..} = case M.lookup i edgeMap of
   Just Edge{..} -> headNode
 
 
--- | The list of outgoint edges from the given node.
+-- | The list of outgoint edges from the given node, in ascending order.
 ingoingEdges :: NodeID -> DAG a b -> [EdgeID]
 ingoingEdges i DAG{..} = case M.lookup i nodeMap of
   Nothing -> error "ingoingEdges: incorrect ID"
-  Just Node{..} -> S.toList ingoSet
+  Just Node{..} -> S.toAscList ingoSet
 
 
--- | The list of outgoint edges from the given node.
+-- | The list of outgoint edges from the given node, in ascending order.
 outgoingEdges :: NodeID -> DAG a b -> [EdgeID]
 outgoingEdges i DAG{..} = case M.lookup i nodeMap of
   Nothing -> error "outgoingEdges: incorrect ID"
-  Just Node{..} -> S.toList outgoSet
+  Just Node{..} -> S.toAscList outgoSet
+
+
+-- | The label assigned to the given node. Return `Nothing` if the node ID is
+-- out of bounds.
+maybeNodeLabel :: NodeID -> DAG a b -> Maybe a
+maybeNodeLabel i DAG{..} = ndLabel <$> M.lookup i nodeMap
 
 
 -- | The label assigned to the given node.
@@ -165,6 +176,12 @@ nodeLabel :: NodeID -> DAG a b -> a
 nodeLabel i DAG{..} = case M.lookup i nodeMap of
   Nothing -> error "nodeLabel: incorrect ID"
   Just Node{..} -> ndLabel
+
+
+-- | The label assigned to the given edge. Return `Nothing` if the edge ID is
+-- out of bounds.
+maybeEdgeLabel :: EdgeID -> DAG a b -> Maybe b
+maybeEdgeLabel i DAG{..} = edLabel <$> M.lookup i edgeMap
 
 
 -- | The label assigned to the given node.
@@ -287,7 +304,7 @@ isFinalEdge edgeID = null . nextEdges edgeID
 
 
 ------------------------------------------------------------------
--- Conversion
+-- Conversion: List
 ------------------------------------------------------------------
 
 
@@ -323,28 +340,6 @@ _fromList nodeLabel0 xs = DAG
             , edLabel  = x }
       return (EdgeID i, edge)
 
---     begNodeMap =
---       let node = Node
---             { ingoSet  = S.empty
---             , outgoSet = S.singleton $ EdgeID 0
---             , ndLabel = nodeLabel0 }
---       in  M.singleton (NodeID 0) node
---     middleNodeMap = M.fromList $ do
---       let nodeLabels = map fst xs
---       (i, nodeLabel) <- zip [1 .. length xs - 1] nodeLabels
---       let node = Node
---             { ingoSet  = S.singleton $ EdgeID (i-1)
---             , outgoSet = S.singleton $ EdgeID i
---             , ndLabel = nodeLabel }
---       return (NodeID i, node)
---     endNodeMap =
---       let n = length xs
---           node = Node
---             { ingoSet  = S.singleton $ EdgeID (n-1)
---             , outgoSet = S.empty
---             , ndLabel = () }
---       in  M.singleton (NodeID n) node
-
 
 -- | Convert a sequence of items to a trivial DAG. Afterwards, check if the
 -- resulting DAG is well-structured and throw error if not.
@@ -369,16 +364,67 @@ fromList' x xs =
 
 
 ------------------------------------------------------------------
--- Provisional
+-- Conversion: DAG
 ------------------------------------------------------------------
 
 
--- | Convert the DAG to a list, provided that it was constructed from a list,
--- which is not checked.
-toListProv :: DAG () a -> [a]
-toListProv DAG{..} =
-  [ edLabel edge
-  | (_edgeID, edge) <- M.toAscList edgeMap ]
+-- | Convert a sequence of labeled edges into a dag.
+-- The function assumes that edges are given in topological order.
+_fromEdgesUnsafe :: [Edge a] -> DAG () a
+_fromEdgesUnsafe edges = DAG
+  { nodeMap = newNodeMap
+  , edgeMap = newEdgeMap }
+  where
+
+    newEdgeMap = M.fromList $ do
+      (i, edge) <- zip [0..] edges
+      return (EdgeID i, edge)
+
+    tailMap = M.fromListWith S.union $ do
+      (i, edge) <- zip [0..] edges
+      return (tailNode edge, S.singleton $ EdgeID i)
+
+    headMap = M.fromListWith S.union $ do
+      (i, edge) <- zip [0..] edges
+      return (headNode edge, S.singleton $ EdgeID i)
+
+    newNodeMap = M.fromList $ do
+      nodeID <- S.toList $ S.union (M.keysSet headMap) (M.keysSet tailMap)
+      let ingo = case M.lookup nodeID headMap of
+            Nothing -> S.empty
+            Just st -> st
+          ougo = case M.lookup nodeID tailMap of
+            Nothing -> S.empty
+            Just st -> st
+          node = Node
+            { ingoSet = ingo
+            , outgoSet = ougo
+            , ndLabel = () }
+      return (nodeID, node)
+
+
+-- | Convert a sequence of labeled edges into a dag.
+-- The function assumes that edges are given in topological order.
+fromEdgesUnsafe :: [Edge a] -> DAG () a
+fromEdgesUnsafe xs =
+  if isOK dag
+  then dag
+  else error "fromEdgesUnsafe: resulting DAG not `isOK`"
+  where
+    dag = _fromEdgesUnsafe xs
+
+
+-- ------------------------------------------------------------------
+-- -- Provisional
+-- ------------------------------------------------------------------
+--
+--
+-- -- | Convert the DAG to a list, provided that it was constructed from a list,
+-- -- which is not checked.
+-- toListProv :: DAG () a -> [a]
+-- toListProv DAG{..} =
+--   [ edLabel edge
+--   | (_edgeID, edge) <- M.toAscList edgeMap ]
 
 
 ------------------------------------------------------------------
