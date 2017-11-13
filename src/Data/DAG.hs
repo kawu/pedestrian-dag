@@ -56,6 +56,9 @@ module Data.DAG
 -- -- ** Provisional
 -- , toListProv
 
+-- * Splitting
+, splitTmp
+
 -- * Check
 , isOK
 ) where
@@ -120,6 +123,13 @@ data Node a = Node
 --
 -- However, this last property is not required for the correcntess of the
 -- inference computations, it only improves their memory complexity.
+--
+-- TODO (13/11/2017): It seems that the following is not required:
+--   * The smallest `EdgeID` of a given DAG, `minEdge`, is equal
+--     to `0` (`EdgeID 0`).
+--   Verify that (see also `splitTmp`, whose second element does not satisfy the
+--   above description)!
+--
 newtype EdgeID = EdgeID {unEdgeID :: Int}
   deriving (Show, Eq, Ord, Num, A.Ix)
 
@@ -412,6 +422,57 @@ fromEdgesUnsafe xs =
   else error "fromEdgesUnsafe: resulting DAG not `isOK`"
   where
     dag = _fromEdgesUnsafe xs
+
+
+------------------------------------------------------------------
+-- Splitting
+------------------------------------------------------------------
+
+
+-- | Try to split the DAG on the given node, so that all the fst element of the
+-- result contains all nodes and edges from the given node is reachable, while
+-- the snd element contains all nodes/edges reachable from this node.
+--
+-- NOTE: some edges can be discarded this way, it seems!
+--
+-- TODO: A provisional function which does not necessarily work correctly.
+-- Now it assumes that node IDs are sorted topologically.
+splitTmp :: NodeID -> DAG a b -> Maybe (DAG a b, DAG a b)
+splitTmp splitNodeID dag
+  | isOK dagLeft && isOK dagRight = Just (dagLeft, dagRight)
+  | otherwise = Nothing
+  where
+
+    dagLeft = DAG nodesLeft edgesLeft
+    dagRight = DAG nodesRight edgesRight
+
+    edgesLeft = M.fromList
+      [ (edgeID, edge)
+      | (edgeID, edge) <- M.toList (edgeMap dag)
+      , endsWith edgeID dag <= splitNodeID
+      ]
+    nodesLeft = M.fromList
+      [ (nodeID, trim node)
+      | (nodeID, node) <- M.toList (nodeMap dag)
+      , nodeID <= splitNodeID ]
+      where trim = trimNode (M.keysSet edgesLeft)
+
+    edgesRight = M.fromList
+      [ (edgeID, edge)
+      | (edgeID, edge) <- M.toList (edgeMap dag)
+      , begsWith edgeID dag >= splitNodeID
+      ]
+    nodesRight = M.fromList
+      [ (nodeID, trim node)
+      | (nodeID, node) <- M.toList (nodeMap dag)
+      , nodeID >= splitNodeID ]
+      where trim = trimNode (M.keysSet edgesRight)
+
+    trimNode edgeSet = trimIngo edgeSet . trimOutgo edgeSet
+    trimIngo edgeSet node =
+      node {ingoSet = ingoSet node `S.intersection` edgeSet}
+    trimOutgo edgeSet node =
+      node {outgoSet = outgoSet node `S.intersection` edgeSet}
 
 
 -- ------------------------------------------------------------------
