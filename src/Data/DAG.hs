@@ -44,6 +44,7 @@ module Data.DAG
 , mapN
 , mapE
 , zipE
+, zipE'
 
 -- * Advanced Operations
 , dagNodes
@@ -64,7 +65,7 @@ module Data.DAG
 ) where
 
 
-import           Control.Applicative ((<$>))
+import           Control.Applicative ((<|>))
 import qualified Data.Foldable as F
 import qualified Data.Traversable as T
 import qualified Data.Array as A
@@ -73,7 +74,7 @@ import qualified Data.Array as A
 import qualified Data.Set as S
 import qualified Data.Map.Strict as M
 
-import Data.Binary (Binary, get, put, putWord8, getWord8)
+import Data.Binary (Binary, get, put) --, putWord8, getWord8)
 -- import Data.Vector.Binary ()
 -- import qualified Data.Binary as B
 
@@ -145,6 +146,13 @@ data Edge a = Edge
 ------------------------------------------------------------------
 -- Primitive Operations
 ------------------------------------------------------------------
+
+
+-- | Return the edge for the given edge ID.
+edgeOn :: EdgeID -> DAG a b -> Edge b
+edgeOn i DAG{..} = case M.lookup i edgeMap of
+  Nothing -> error "edgeWith: incorrent edge ID"
+  Just edge -> edge
 
 
 -- | Return the tail node of the given edge.
@@ -277,6 +285,35 @@ zipE dagL dagR
       | otherwise =
           let newLabel = (edLabel e1, edLabel e2)
           in  e1 {edLabel = newLabel}
+
+
+-- | A version of `zipE` which does not require that the sets of edges be the
+-- same. It does not preserve the node labels, though (it could be probably
+-- easily modified so as to account for them, though).
+zipE' :: DAG x a -> DAG y b -> DAG () (Maybe a, Maybe b)
+zipE' dagL dagR
+
+  | M.keysSet (nodeMap dagL) /= M.keysSet (nodeMap dagR) =
+      error "zipE': different sets of node IDs"
+
+  | otherwise = fromEdgesUnsafe newEdgeList
+
+  where
+
+    edgesIn dag = map (flip edgeOn dag) (dagEdges dag)
+
+    reconcile (x1, y1) (x2, y2) = (x1 <|> x2, y1 <|> y2)
+    newEdgeMap = M.fromListWith reconcile $
+      [ ( (tailNode edge, headNode edge)
+        , (Just (edLabel edge), Nothing) )
+      | edge <- edgesIn dagL ] ++
+      [ ( (tailNode edge, headNode edge)
+        , (Nothing, Just (edLabel edge)) )
+      | edge <- edgesIn dagR ]
+
+    newEdgeList =
+      [ Edge {tailNode = from, headNode = to, edLabel = label}
+      | ((from, to), label) <- M.toList newEdgeMap ]
 
 
 ------------------------------------------------------------------
