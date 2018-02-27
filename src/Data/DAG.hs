@@ -112,7 +112,8 @@ data Node a = Node
 -- | ID of an edge. The following properties must be satisfied by `EdgeID`:
 --
 --   * The ordering of edge IDs (`Ord` instance) is consistent with the
---     topological ordering of the edges.
+--     topological ordering of the edges. (TODO 26/02/2018: be more specific
+--     about what consistency means in this context)
 --   * The smallest `EdgeID` of a given DAG, `minEdge`, is equal
 --     to `0` (`EdgeID 0`).
 --
@@ -131,6 +132,8 @@ data Node a = Node
 --   Verify that (see also `splitTmp`, whose second element does not satisfy the
 --   above description)!
 --
+-- TODO (26/02/2018): Perhaps we should also assume that node IDs are sorted
+-- topologically? (see `splitTmp`).
 newtype EdgeID = EdgeID {unEdgeID :: Int}
   deriving (Show, Eq, Ord, Num, A.Ix)
 
