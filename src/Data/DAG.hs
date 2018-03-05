@@ -69,6 +69,7 @@ module Data.DAG
 
 
 import           Control.Applicative ((<|>))
+import           Control.Monad (guard)
 import qualified Data.Foldable as F
 import qualified Data.Traversable as T
 import qualified Data.Array as A
@@ -521,28 +522,52 @@ splitTmp splitNodeID dag
 ------------------------------------------------------------------
 
 
--- | Remove the nodes (and the corresponding edges) which are not in the given set.
-filterDAG :: S.Set NodeID -> DAG a b -> DAG a b
-filterDAG nodeSet DAG{..} =
+-- -- | Remove the nodes (and the corresponding edges) which are not in the given set.
+-- filterDAG :: S.Set NodeID -> DAG a b -> DAG a b
+-- filterDAG nodeSet DAG{..} =
+--   DAG newNodeMap newEdgeMap
+--   where
+--     edgeSet = S.fromList
+--       [ edgeID
+--       | (edgeID, edge) <- M.toList edgeMap
+--       , tailNode edge `S.member` nodeSet
+--       , headNode edge `S.member` nodeSet ]
+--     updNode nd = nd
+--       { ingoSet = ingoSet nd `S.intersection` edgeSet
+--       , outgoSet = outgoSet nd `S.intersection` edgeSet }
+--     newNodeMap = M.fromList
+--       [ (nodeID, updNode node)
+--       | (nodeID, node) <- M.toList nodeMap
+--       , nodeID `S.member` nodeSet ]
+--     newEdgeMap = M.fromList
+--       [ (edgeID, edge)
+--       | (edgeID, edge) <- M.toList edgeMap
+--       , tailNode edge `S.member` nodeSet
+--       , headNode edge `S.member` nodeSet ]
+
+
+-- | Remove the edges (and the corresponding nodes) which are not in the given set.
+filterDAG :: S.Set EdgeID -> DAG a b -> DAG a b
+filterDAG edgeSet DAG{..} =
   DAG newNodeMap newEdgeMap
   where
-    edgeSet = S.fromList
-      [ edgeID
-      | (edgeID, edge) <- M.toList edgeMap
-      , tailNode edge `S.member` nodeSet
-      , headNode edge `S.member` nodeSet ]
-    updNode nd = nd
-      { ingoSet = ingoSet nd `S.intersection` edgeSet
-      , outgoSet = outgoSet nd `S.intersection` edgeSet }
-    newNodeMap = M.fromList
-      [ (nodeID, updNode node)
-      | (nodeID, node) <- M.toList nodeMap
-      , nodeID `S.member` nodeSet ]
-    newEdgeMap = M.fromList
-      [ (edgeID, edge)
-      | (edgeID, edge) <- M.toList edgeMap
-      , tailNode edge `S.member` nodeSet
-      , headNode edge `S.member` nodeSet ]
+    newEdgeMap = M.fromList $ do
+      (edgeID, edge) <- M.toList edgeMap
+      guard $ edgeID `S.member` edgeSet
+      return (edgeID, edge)
+    newNodeMap = M.fromList $ do
+      (nodeID, node) <- M.toList nodeMap
+      Just newNode <- return $ updNode node
+      return (nodeID, newNode)
+    updNode nd
+      -- removing disconnected nodes
+      | S.null newIngoSet && S.null newOutgoSet = Nothing
+      | otherwise = Just $ nd
+        { ingoSet = newIngoSet
+        , outgoSet = newOutgoSet }
+      where
+        newIngoSet = ingoSet nd `S.intersection` edgeSet
+        newOutgoSet = outgoSet nd `S.intersection` edgeSet
 
 
 -- ------------------------------------------------------------------
