@@ -16,7 +16,7 @@
 module Data.DAG
 (
 -- * Types
-  DAG
+  DAG (..)
 , NodeID (..)
 , EdgeID (..)
 , Edge (..)
