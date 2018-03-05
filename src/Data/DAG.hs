@@ -293,17 +293,15 @@ zipE dagL dagR
           in  e1 {edLabel = newLabel}
 
 
--- | A version of `zipE` which does not require that the sets of edges be the
--- same. It does not preserve the node labels, though (it could be probably
+-- | A version of `zipE` which does not require that the sets of edges/nodes be
+-- the same. It does not preserve the node labels, though (it could be probably
 -- easily modified so as to account for them, though).
 zipE' :: DAG x a -> DAG y b -> DAG () (Maybe a, Maybe b)
 zipE' dagL dagR
-
-  | M.keysSet (nodeMap dagL) /= M.keysSet (nodeMap dagR) =
-      error "zipE': different sets of node IDs"
-
-  | otherwise = fromEdgesUnsafe newEdgeList
-
+--   | M.keysSet (nodeMap dagL) /= M.keysSet (nodeMap dagR) =
+--       error "zipE': different sets of node IDs"
+--   | otherwise = fromEdgesUnsafe newEdgeList
+  = fromEdgesUnsafe newEdgeList
   where
 
     edgesIn dag = map (flip edgeOn dag) (dagEdges dag)
