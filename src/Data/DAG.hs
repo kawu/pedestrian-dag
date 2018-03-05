@@ -16,7 +16,7 @@
 module Data.DAG
 (
 -- * Types
-  DAG (..)
+  DAG
 , NodeID (..)
 , EdgeID (..)
 , Edge (..)
@@ -59,6 +59,9 @@ module Data.DAG
 
 -- * Splitting
 , splitTmp
+
+-- * Filtering
+, filterDAG
 
 -- * Check
 , isOK
@@ -513,6 +516,35 @@ splitTmp splitNodeID dag
       node {ingoSet = ingoSet node `S.intersection` edgeSet}
     trimOutgo edgeSet node =
       node {outgoSet = outgoSet node `S.intersection` edgeSet}
+
+
+-----------------------------------------------------------------
+-- Filtering
+------------------------------------------------------------------
+
+
+-- | Remove the nodes (and the corresponding edges) which are not in the given set.
+filterDAG :: S.Set NodeID -> DAG a b -> DAG a b
+filterDAG nodeSet DAG{..} =
+  DAG newNodeMap newEdgeMap
+  where
+    edgeSet = S.fromList
+      [ edgeID
+      | (edgeID, edge) <- M.toList edgeMap
+      , tailNode edge `S.member` nodeSet
+      , headNode edge `S.member` nodeSet ]
+    updNode nd = nd
+      { ingoSet = ingoSet nd `S.intersection` edgeSet
+      , outgoSet = outgoSet nd `S.intersection` edgeSet }
+    newNodeMap = M.fromList
+      [ (nodeID, updNode node)
+      | (nodeID, node) <- M.toList nodeMap
+      , nodeID `S.member` nodeSet ]
+    newEdgeMap = M.fromList
+      [ (edgeID, edge)
+      | (edgeID, edge) <- M.toList edgeMap
+      , tailNode edge `S.member` nodeSet
+      , headNode edge `S.member` nodeSet ]
 
 
 -- ------------------------------------------------------------------
