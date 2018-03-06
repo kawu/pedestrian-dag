@@ -65,12 +65,19 @@ module Data.DAG
 
 -- * Check
 , isOK
+, isDAG
+
+-- * Topological sorting
+, topoSort
 ) where
 
 
 import           Control.Applicative ((<|>))
+import           Control.Arrow (first)
 import           Control.Monad (guard)
 import qualified Data.Foldable as F
+import qualified Data.List as L
+import           Data.Maybe (isJust)
 import qualified Data.Traversable as T
 import qualified Data.Array as A
 -- import qualified Data.Vector as V
@@ -588,7 +595,7 @@ filterDAG edgeSet DAG{..} =
 ------------------------------------------------------------------
 
 
--- | Check if the DAG is well-structured.
+-- | Check if the DAG is well-structured (see also `isDAG`).
 isOK :: DAG a b -> Bool
 isOK DAG{..} =
   nodeMapOK && edgeMapOK
@@ -601,3 +608,57 @@ isOK DAG{..} =
       [ M.member nodeID nodeMap
       | (_edgeID, Edge{..}) <- M.toList edgeMap
       , nodeID <- [tailNode, headNode] ]
+
+
+-- | Check if the DAG is actually acyclic.
+isDAG :: DAG a b -> Bool
+isDAG = isJust . topoSort
+
+
+------------------------------------------------------------------
+-- Topological sorting
+------------------------------------------------------------------
+
+
+-- | Retrieve the list of nodes sorted topologically. Returns `Nothing` if the
+-- graph has cycles.
+topoSort :: DAG a b -> Maybe [NodeID]
+topoSort dag0 =
+  go dag0 $ S.fromList
+    [ nodeID | nodeID <- dagNodes dag0
+    , null $ ingoingEdges nodeID dag0 ]
+  where
+    -- `noIncoming` is the set of nodes with no incoming edges.
+    go dag noIncoming =
+      case S.minView noIncoming of
+        Just (nodeID, rest) ->
+          let (dag', noIncoming') = removeNode nodeID dag
+          in  (nodeID:) <$> go dag' (S.union rest noIncoming')
+        Nothing ->
+          if null dag
+          then Just []
+          else Nothing
+
+
+-- | Remove the node from the graph, together with all the outgoing edges, and
+-- return the set of nodes in the resulting DAG which have no incoming edges.
+removeNode :: NodeID -> DAG a b -> (DAG a b, S.Set NodeID)
+removeNode nodeID dag0 =
+  first doRemoveNode $ L.foldl' f (dag0, S.empty) (outgoingEdges nodeID dag0)
+  where
+    doRemoveNode dag = dag
+      { nodeMap = M.delete nodeID (nodeMap dag) }
+    f (dag, nodeSet) edgeID =
+      let
+        nextID = endsWith edgeID dag
+        dag' = dag
+          { edgeMap = M.delete edgeID (edgeMap dag)
+          , nodeMap =
+              let adj node =
+                    node {ingoSet = S.delete edgeID (ingoSet node)}
+              in  M.adjust adj nextID (nodeMap dag)
+          }
+      in
+        if null $ ingoingEdges nextID dag'
+        then (dag', S.insert nextID nodeSet)
+        else (dag', nodeSet)
