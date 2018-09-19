@@ -8,9 +8,6 @@
 -- | A pedestrian implementation of a directed acyclic graph. Sharing is
 -- explicitely represented by using node-level and edge-level identifiers. The
 -- module may be convenient to use if your data structure doesn't change often.
---
--- TODO: Implement topological sorting after which the order over edge IDs and
--- node IDs is consistent with the topological order.
 
 
 module Data.DAG
@@ -102,6 +99,8 @@ data DAG a b = DAG
   , edgeMap :: M.Map EdgeID (Edge b)
   } deriving (Functor, F.Foldable, T.Traversable)
 
+-- The instance below is needed for Concraft.  Something has to be done with
+-- it.
 instance (Binary a, Binary b) => Binary (DAG a b) where
   put = undefined
   get = undefined
